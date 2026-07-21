@@ -539,6 +539,25 @@ function esc(s){
   return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+// 한글 문자열에서 초성만 추출 (예: "손성지" → "ㅅㅅㅈ")
+const _CHOSEONG = ['ㄱ','ㄲ','ㄴ','ㄷ','ㄸ','ㄹ','ㅁ','ㅂ','ㅃ','ㅅ','ㅆ','ㅇ','ㅈ','ㅉ','ㅊ','ㅋ','ㅌ','ㅍ','ㅎ'];
+function toChoseong(str){
+  let out = '';
+  for(const ch of String(str)){
+    const code = ch.charCodeAt(0);
+    if(code >= 0xAC00 && code <= 0xD7A3){
+      out += _CHOSEONG[Math.floor((code - 0xAC00) / 588)];
+    } else {
+      out += ch; // 한글 아니면 그대로 (자음 낱글자 포함)
+    }
+  }
+  return out;
+}
+// 검색어가 초성만으로 이뤄졌는지 (ㅅ, ㄱㅎ 등)
+function isChoseongQuery(q){
+  return q.length>0 && [...q].every(c=>_CHOSEONG.includes(c));
+}
+
 /* ================= 상태 ================= */
 const IS_ADMIN = (location.hash || '').indexOf('admin') > -1;
 
@@ -2017,11 +2036,18 @@ async function renderList(app){
   }
   const allList = (await getResponses()).slice().reverse();
 
-  // 검색 필터
-  const q = (state.listSearch||'').trim().toLowerCase();
+  // 검색 필터 (초성 검색 지원: "ㅅ" → 손성지, 서영... / 일반 검색: 부분일치)
+  const rawQ = (state.listSearch||'').trim();
+  const q = rawQ.toLowerCase();
+  const choseongMode = isChoseongQuery(rawQ);
   const filtered = q ? allList.filter(rec=>{
     const top = TYPES.map(t=>({...t, score:rec.scores[t.id]})).sort((a,b)=>b.score-a.score)[0];
-    const hay = [rec.name, rec.job, rec.relation, top.name].filter(Boolean).join(' ').toLowerCase();
+    const fields = [rec.name, rec.job, rec.relation, top.name].filter(Boolean);
+    if(choseongMode){
+      // 초성으로 검색: 각 필드의 초성이 검색 초성으로 시작하거나 포함하면 매치
+      return fields.some(f=>toChoseong(f).includes(rawQ));
+    }
+    const hay = fields.join(' ').toLowerCase();
     return hay.includes(q);
   }) : allList;
 
@@ -2049,7 +2075,7 @@ async function renderList(app){
 
     ${!selecting ? `
     <div class="no-print" style="margin-bottom:14px;">
-      <input type="text" id="listSearchInput" placeholder="🔍 이름·유형·직업으로 검색" value="${esc(state.listSearch||'')}"
+      <input type="text" id="listSearchInput" placeholder="🔍 이름·유형·직업 검색 (초성 ㅅ 가능)" value="${esc(state.listSearch||'')}"
         style="width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:8px;font-size:14px;box-sizing:border-box;background:var(--white);color:var(--ink);">
     </div>` : ''}
 
@@ -2129,16 +2155,19 @@ async function renderList(app){
     const rf = document.getElementById('refreshBtn');
     if(rf) rf.onclick = ()=>{ state._listSynced=false; renderList(app); };
 
-    // 검색 (입력 시 즉시 필터, 커서 위치 유지)
+    // 검색: 타이핑 중엔 재렌더링하지 않고(한글 조합 보호), 잠깐 멈추면 목록 갱신
     const si = document.getElementById('listSearchInput');
     if(si){
       si.oninput = (e)=>{
         state.listSearch = e.target.value;
         state.listPage = 0;
-        renderList(app).then(()=>{
-          const ni = document.getElementById('listSearchInput');
-          if(ni){ ni.focus(); ni.setSelectionRange(ni.value.length, ni.value.length); }
-        });
+        clearTimeout(window._listSearchTimer);
+        window._listSearchTimer = setTimeout(()=>{
+          renderList(app).then(()=>{
+            const ni = document.getElementById('listSearchInput');
+            if(ni){ ni.focus(); const L=ni.value.length; ni.setSelectionRange(L,L); }
+          });
+        }, 350);
       };
     }
     // 페이지 이동
