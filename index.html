@@ -554,18 +554,51 @@ async function checkAdminAuth(){
   try{
     const saved = localStorage.getItem('kepti_admin_auth');
     if(saved === ADMIN_PASSWORD_HASH) return true; // 이 기기에서 이미 인증됨
-    for(let i=0;i<3;i++){
-      const pw = prompt('관리자 비밀번호를 입력하세요');
-      if(pw===null) break; // 취소
-      const h = await sha256Hex(pw);
-      if(h === ADMIN_PASSWORD_HASH){
-        localStorage.setItem('kepti_admin_auth', h);
-        return true;
-      }
-      alert('비밀번호가 올바르지 않습니다.'+(i<2?` (남은 시도 ${2-i}회)`:''));
-    }
-  }catch(e){ /* crypto 미지원 등 예외 시 인증 실패 처리 */ }
+  }catch(e){}
   return false;
+}
+
+// 앱 디자인에 맞춘 관리자 잠금 화면
+function renderAdminLock(){
+  const app = document.getElementById('app');
+  app.innerHTML = `
+    <div style="max-width:380px;margin:48px auto 0;">
+      <div class="card" style="text-align:center;padding:36px 26px;">
+        <div style="font-size:44px;margin-bottom:12px;">🔐</div>
+        <h3 style="margin:0 0 6px;font-size:20px;color:var(--navy);">관리자 인증</h3>
+        <p style="color:var(--muted);font-size:13.5px;margin:0 0 20px;">관리자 비밀번호를 입력해주세요</p>
+        <input type="password" inputmode="numeric" id="adminPwInput" autocomplete="off"
+          style="width:100%;box-sizing:border-box;padding:14px;border:1.5px solid var(--line);border-radius:8px;font-size:20px;text-align:center;letter-spacing:.3em;background:var(--white);color:var(--ink);">
+        <div id="adminPwErr" style="color:#b5462f;font-size:12.5px;min-height:18px;margin:8px 0 10px;"></div>
+        <button class="btn-primary btn-block" id="adminPwBtn" style="padding:14px;font-size:15px;">확인</button>
+        <button class="btn-ghost btn-block" id="adminPwCancel" style="margin-top:8px;">응답자 페이지로 이동</button>
+      </div>
+    </div>`;
+  const input = document.getElementById('adminPwInput');
+  const err = document.getElementById('adminPwErr');
+  let tries = 0;
+  const doCheck = async ()=>{
+    const pw = input.value;
+    if(!pw){ err.textContent = '비밀번호를 입력해주세요.'; return; }
+    const h = await sha256Hex(pw);
+    if(h === ADMIN_PASSWORD_HASH){
+      try{ localStorage.setItem('kepti_admin_auth', h); }catch(e){}
+      render();
+    } else {
+      tries++;
+      if(tries >= 3){
+        alert('비밀번호 3회 오류로 응답자 페이지로 이동합니다.');
+        location.href = location.pathname;
+        return;
+      }
+      err.textContent = `비밀번호가 올바르지 않습니다. (남은 시도 ${3-tries}회)`;
+      input.value = ''; input.focus();
+    }
+  };
+  document.getElementById('adminPwBtn').onclick = doCheck;
+  input.onkeydown = (e)=>{ if(e.key==='Enter') doCheck(); };
+  document.getElementById('adminPwCancel').onclick = ()=>{ location.href = location.pathname; };
+  setTimeout(()=>input.focus(), 100);
 }
 
 let state = {
@@ -2132,8 +2165,8 @@ async function init(){
   if(IS_ADMIN){
     const ok = await checkAdminAuth();
     if(!ok){
-      // 인증 실패 → 응답자 모드로 이동 (해시 제거)
-      location.href = location.pathname;
+      // 미인증 → 예쁜 잠금 화면 표시
+      renderAdminLock();
       return;
     }
   }
