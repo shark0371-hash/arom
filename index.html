@@ -732,7 +732,7 @@ async function renderLanding(app){
         <button class="btn-ghost" id="adminLockBtn" style="flex:1;">로그아웃</button>
       </div>
       <div style="text-align:center;margin-top:12px;font-size:11.5px;color:var(--muted);">
-        버전 <b>v7</b> · 2026.07.22
+        버전 <b>v8</b> · 2026.07.22
       </div>
     </div>
   `;
@@ -2205,17 +2205,17 @@ async function renderList(app){
       let lastPainted = state.listSearch || '';
       const schedule = ()=>{
         clearTimeout(timer);
-        let retry = 0;
+        let waited = false;
         timer = setTimeout(function run(){
-          // 아직 한글 조합 중이면 화면을 건드리지 않고 잠시 미룬다 (최대 5회)
-          if(composing && retry < 5){ retry++; timer = setTimeout(run, 200); return; }
+          // 조합 중이면 아주 잠깐만 한 번 더 기다렸다가, 그래도 진행 (반응 속도 유지)
+          if(composing && !waited){ waited = true; timer = setTimeout(run, 110); return; }
           const v = si.value;
           if(v === lastPainted) return;   // 바뀐 게 없으면 그리지 않음
           lastPainted = v;
           state.listSearch = v;
           state.listPage = 0;
           paintList();
-        }, 450);
+        }, 160);
       };
       si.addEventListener('compositionstart', ()=>{ composing = true; clearTimeout(timer); });
       si.addEventListener('compositionend', ()=>{ composing = false; schedule(); });
