@@ -731,6 +731,9 @@ async function renderLanding(app){
         <button class="btn-ghost" id="pwTestBtn" style="flex:1;">🔑 비밀번호 확인 테스트</button>
         <button class="btn-ghost" id="adminLockBtn" style="flex:1;">로그아웃</button>
       </div>
+      <div style="text-align:center;margin-top:12px;font-size:11.5px;color:var(--muted);">
+        버전 <b>v7</b> · 2026.07.22
+      </div>
     </div>
   `;
 
@@ -2194,21 +2197,30 @@ async function renderList(app){
     const rf = document.getElementById('refreshBtn');
     if(rf) rf.onclick = ()=>{ state._listSynced=false; renderList(app); };
 
-    // 검색: 검색창은 그대로 두고 목록만 갱신 (한글 조합 깨짐 방지)
+    // 검색: 검색창은 절대 다시 만들지 않고, 목록 갱신도 조합이 완전히 끝난 뒤로 미룸
     const si = document.getElementById('listSearchInput');
     if(si){
       let composing = false;
-      const apply = ()=>{
-        state.listSearch = si.value;
-        state.listPage = 0;
-        paintList();
+      let timer = null;
+      let lastPainted = state.listSearch || '';
+      const schedule = ()=>{
+        clearTimeout(timer);
+        let retry = 0;
+        timer = setTimeout(function run(){
+          // 아직 한글 조합 중이면 화면을 건드리지 않고 잠시 미룬다 (최대 5회)
+          if(composing && retry < 5){ retry++; timer = setTimeout(run, 200); return; }
+          const v = si.value;
+          if(v === lastPainted) return;   // 바뀐 게 없으면 그리지 않음
+          lastPainted = v;
+          state.listSearch = v;
+          state.listPage = 0;
+          paintList();
+        }, 450);
       };
-      si.addEventListener('compositionstart', ()=>{ composing = true; });
-      si.addEventListener('compositionend', ()=>{ composing = false; apply(); });
-      si.addEventListener('input', ()=>{
-        if(composing) return;      // 한글 조합 중에는 건드리지 않음
-        apply();
-      });
+      si.addEventListener('compositionstart', ()=>{ composing = true; clearTimeout(timer); });
+      si.addEventListener('compositionend', ()=>{ composing = false; schedule(); });
+      si.addEventListener('input', ()=>{ schedule(); });
+      si.addEventListener('blur', ()=>{ composing = false; schedule(); });
     }
   } else {
     const cm = document.getElementById('coupleMakeBtn');
