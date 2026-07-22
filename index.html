@@ -2043,40 +2043,40 @@ async function renderList(app){
   }
   const allList = (await getResponses()).slice().reverse();
 
-  // 검색 필터
-  const rawQ = (state.listSearch||'').trim();
-  const q = rawQ.toLowerCase();
-  const choseongMode = isChoseongQuery(rawQ);
-  let filtered;
-  if(!q){
-    filtered = allList;
-  } else if(choseongMode){
-    // 초성 검색: 이름 초성이 검색어로 "시작"하는 사람 우선, 없으면 이름에 초성 "포함"
-    const nameCho = rec => toChoseong(rec.name||'');
-    const starts = allList.filter(rec => nameCho(rec).startsWith(rawQ));
-    const contains = allList.filter(rec => !nameCho(rec).startsWith(rawQ) && nameCho(rec).includes(rawQ));
-    filtered = [...starts, ...contains];
-  } else {
-    // 일반 검색: 이름·유형·직업 부분일치
-    filtered = allList.filter(rec=>{
-      const top = TYPES.map(t=>({...t, score:rec.scores[t.id]})).sort((a,b)=>b.score-a.score)[0];
-      const hay = [rec.name, rec.job, rec.relation, top.name].filter(Boolean).join(' ').toLowerCase();
-      return hay.includes(q);
-    });
-  }
-
-  // 페이지네이션 (20개씩)
+  // 현재 검색어/페이지 기준으로 표시할 목록 계산
   const PER = 20;
-  if(state.listPage===undefined) state.listPage = 0;
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PER));
-  if(state.listPage >= totalPages) state.listPage = totalPages-1;
-  const pageStart = state.listPage * PER;
-  const list = filtered.slice(pageStart, pageStart + PER);
+  function computeView(){
+    const rawQ = (state.listSearch||'').trim();
+    const q = rawQ.toLowerCase();
+    let filtered;
+    if(!q){
+      filtered = allList;
+    } else if(isChoseongQuery(rawQ)){
+      // 초성 검색: 이름 초성이 검색어로 "시작"하는 사람 우선, 그다음 "포함"
+      const nameCho = rec => toChoseong(rec.name||'');
+      const starts = allList.filter(rec => nameCho(rec).startsWith(rawQ));
+      const contains = allList.filter(rec => !nameCho(rec).startsWith(rawQ) && nameCho(rec).includes(rawQ));
+      filtered = [...starts, ...contains];
+    } else {
+      filtered = allList.filter(rec=>{
+        const top = TYPES.map(t=>({...t, score:rec.scores[t.id]})).sort((a,b)=>b.score-a.score)[0];
+        const hay = [rec.name, rec.job, rec.relation, top.name].filter(Boolean).join(' ').toLowerCase();
+        return hay.includes(q);
+      });
+    }
+    if(state.listPage===undefined) state.listPage = 0;
+    const totalPages = Math.max(1, Math.ceil(filtered.length / PER));
+    if(state.listPage >= totalPages) state.listPage = totalPages-1;
+    if(state.listPage < 0) state.listPage = 0;
+    const pageStart = state.listPage * PER;
+    return { q, filtered, totalPages, list: filtered.slice(pageStart, pageStart + PER) };
+  }
+  const v0 = computeView();
 
   app.innerHTML = `
     <div class="hero" style="padding-top:0;">
       <h1 class="serif" style="font-size:24px;">응답 목록</h1>
-      <p>총 ${allList.length}건${q?` · 검색결과 ${filtered.length}건`:''}${selecting? ' · 커플로 묶을 두 사람을 선택하세요 ('+selected.length+'/2)':''}${(!selecting && !state._listSynced)? ' · 동기화 중…':''}</p>
+      <p id="listCount"></p>
     </div>
 
     <div class="no-print" style="display:flex;gap:8px;margin-bottom:14px;">
@@ -2094,74 +2094,99 @@ async function renderList(app){
     </div>` : ''}
 
     <div id="listBody"></div>
-    ${filtered.length===0 && state._listSynced? `<div class="card"><p style="color:var(--muted);font-size:13.5px;margin:0;">${q?'검색 결과가 없습니다.':'아직 응답이 없습니다.'}</p></div>`:''}
-
-    ${totalPages>1 ? `
-    <div class="no-print" style="display:flex;align-items:center;justify-content:center;gap:12px;margin:18px 0;">
-      <button class="btn-ghost" id="prevPageBtn" ${state.listPage===0?'disabled':''} style="min-width:64px;">‹ 이전</button>
-      <span style="font-size:14px;color:var(--muted);font-weight:600;">${state.listPage+1} / ${totalPages}</span>
-      <button class="btn-ghost" id="nextPageBtn" ${state.listPage>=totalPages-1?'disabled':''} style="min-width:64px;">다음 ›</button>
-    </div>` : ''}
+    <div id="listEmpty"></div>
+    <div id="listPager" class="no-print"></div>
   `;
 
-  const tbody = document.getElementById('listBody');
-  list.forEach(rec=>{
-    const ranked = TYPES.map(t=>({...t, score:rec.scores[t.id]})).sort((a,b)=>b.score-a.score);
-    const top = ranked[0];
-    const w = calcWing(rec.scores);
-    const d = new Date(rec.date);
-    const isSel = selected.some(s=>s.id===rec.id);
-    const dateStr = `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')}`;
-    const age = birthToIntlAge(rec.birth);
-    const info = [rec.gender, rec.relation, age!==''?`만 ${age}세`:'', rec.job].filter(Boolean).map(esc).join(' · ');
-    const row = document.createElement('div');
-    row.className = 'list-row' + (isSel?' sel':'');
+  // 목록/개수/페이지 버튼만 다시 그림 (검색창은 건드리지 않음 → 한글 조합 유지)
+  function paintList(){
+    const { q, filtered, totalPages, list } = computeView();
 
-    if(selecting){
-      row.innerHTML = `
-        <div class="lr-check">${isSel?'✅':'⬜'}</div>
-        <div class="lr-main">
-          <div class="lr-name">${esc(rec.name)}</div>
-          ${info?`<div class="lr-info">${info}</div>`:''}
-        </div>
-        <div class="lr-right">
-          <div class="lr-type" style="background:${typeColor(top.id)};">${w.label}</div>
-          <div class="lr-date mono">${dateStr}</div>
-        </div>`;
-      row.onclick = ()=>{
-        let sel = state.coupleSelected || [];
-        if(sel.some(s=>s.id===rec.id)){ sel = sel.filter(s=>s.id!==rec.id); }
-        else { if(sel.length>=2){ alert('두 사람까지만 선택할 수 있어요. 먼저 선택을 해제해주세요.'); return; } sel = [...sel, rec]; }
-        state.coupleSelected = sel;
-        renderList(app);
-      };
-    } else {
-      row.innerHTML = `
-        <div class="lr-main">
-          <div class="lr-name">${esc(rec.name)} <span class="lr-typename">${top.name}</span></div>
-          ${info?`<div class="lr-info">${info}</div>`:''}
-        </div>
-        <div class="lr-right">
-          <div class="lr-type" style="background:${typeColor(top.id)};">${w.label}</div>
-          <div class="lr-date mono">${dateStr}</div>
-        </div>
-        <div class="lr-del" data-id="${rec.id}" title="삭제">🗑</div>`;
-      row.onclick = (e)=>{
-        if(e.target.classList.contains('lr-del')){
-          e.stopPropagation();
-          if(confirm(`${rec.name}님의 응답을 삭제할까요? 되돌릴 수 없어요.`)){
-            const all = getResponses().filter(r=>r.id!==rec.id);
-            saveResponses(all);
-            fbDeleteResponse(rec.id);
-            renderList(app);
+    const cnt = document.getElementById('listCount');
+    if(cnt) cnt.textContent = `총 ${allList.length}건${q?` · 검색결과 ${filtered.length}건`:''}${selecting? ' · 커플로 묶을 두 사람을 선택하세요 ('+selected.length+'/2)':''}${(!selecting && !state._listSynced)? ' · 동기화 중…':''}`;
+
+    const tbody = document.getElementById('listBody');
+    if(!tbody) return;
+    tbody.innerHTML = '';
+    list.forEach(rec=>{
+      const ranked = TYPES.map(t=>({...t, score:rec.scores[t.id]})).sort((a,b)=>b.score-a.score);
+      const top = ranked[0];
+      const w = calcWing(rec.scores);
+      const d = new Date(rec.date);
+      const isSel = selected.some(s=>s.id===rec.id);
+      const dateStr = `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')}`;
+      const age = birthToIntlAge(rec.birth);
+      const info = [rec.gender, rec.relation, age!==''?`만 ${age}세`:'', rec.job].filter(Boolean).map(esc).join(' · ');
+      const row = document.createElement('div');
+      row.className = 'list-row' + (isSel?' sel':'');
+
+      if(selecting){
+        row.innerHTML = `
+          <div class="lr-check">${isSel?'✅':'⬜'}</div>
+          <div class="lr-main">
+            <div class="lr-name">${esc(rec.name)}</div>
+            ${info?`<div class="lr-info">${info}</div>`:''}
+          </div>
+          <div class="lr-right">
+            <div class="lr-type" style="background:${typeColor(top.id)};">${w.label}</div>
+            <div class="lr-date mono">${dateStr}</div>
+          </div>`;
+        row.onclick = ()=>{
+          let sel = state.coupleSelected || [];
+          if(sel.some(s=>s.id===rec.id)){ sel = sel.filter(s=>s.id!==rec.id); }
+          else { if(sel.length>=2){ alert('두 사람까지만 선택할 수 있어요. 먼저 선택을 해제해주세요.'); return; } sel = [...sel, rec]; }
+          state.coupleSelected = sel;
+          renderList(app);
+        };
+      } else {
+        row.innerHTML = `
+          <div class="lr-main">
+            <div class="lr-name">${esc(rec.name)} <span class="lr-typename">${top.name}</span></div>
+            ${info?`<div class="lr-info">${info}</div>`:''}
+          </div>
+          <div class="lr-right">
+            <div class="lr-type" style="background:${typeColor(top.id)};">${w.label}</div>
+            <div class="lr-date mono">${dateStr}</div>
+          </div>
+          <div class="lr-del" data-id="${rec.id}" title="삭제">🗑</div>`;
+        row.onclick = (e)=>{
+          if(e.target.classList.contains('lr-del')){
+            e.stopPropagation();
+            if(confirm(`${rec.name}님의 응답을 삭제할까요? 되돌릴 수 없어요.`)){
+              const all = getResponses().filter(r=>r.id!==rec.id);
+              saveResponses(all);
+              fbDeleteResponse(rec.id);
+              renderList(app);
+            }
+            return;
           }
-          return;
-        }
-        state.lastResult = rec; state.view='result'; render();
-      };
+          state.lastResult = rec; state.view='result'; render();
+        };
+      }
+      tbody.appendChild(row);
+    });
+
+    const emptyBox = document.getElementById('listEmpty');
+    if(emptyBox){
+      emptyBox.innerHTML = (filtered.length===0 && state._listSynced)
+        ? `<div class="card"><p style="color:var(--muted);font-size:13.5px;margin:0;">${q?'검색 결과가 없습니다.':'아직 응답이 없습니다.'}</p></div>` : '';
     }
-    tbody.appendChild(row);
-  });
+
+    const pager = document.getElementById('listPager');
+    if(pager){
+      pager.innerHTML = totalPages>1 ? `
+        <div style="display:flex;align-items:center;justify-content:center;gap:12px;margin:18px 0;">
+          <button class="btn-ghost" id="prevPageBtn" ${state.listPage===0?'disabled':''} style="min-width:64px;">‹ 이전</button>
+          <span style="font-size:14px;color:var(--muted);font-weight:600;">${state.listPage+1} / ${totalPages}</span>
+          <button class="btn-ghost" id="nextPageBtn" ${state.listPage>=totalPages-1?'disabled':''} style="min-width:64px;">다음 ›</button>
+        </div>` : '';
+      const pp = document.getElementById('prevPageBtn');
+      if(pp) pp.onclick = ()=>{ if(state.listPage>0){ state.listPage--; paintList(); window.scrollTo(0,0); } };
+      const np = document.getElementById('nextPageBtn');
+      if(np) np.onclick = ()=>{ state.listPage++; paintList(); window.scrollTo(0,0); };
+    }
+  }
+  paintList();
 
   if(!selecting){
     const cs = document.getElementById('coupleStartBtn');
@@ -2169,26 +2194,22 @@ async function renderList(app){
     const rf = document.getElementById('refreshBtn');
     if(rf) rf.onclick = ()=>{ state._listSynced=false; renderList(app); };
 
-    // 검색: 타이핑 중엔 재렌더링하지 않고(한글 조합 보호), 잠깐 멈추면 목록 갱신
+    // 검색: 검색창은 그대로 두고 목록만 갱신 (한글 조합 깨짐 방지)
     const si = document.getElementById('listSearchInput');
     if(si){
-      si.oninput = (e)=>{
-        state.listSearch = e.target.value;
+      let composing = false;
+      const apply = ()=>{
+        state.listSearch = si.value;
         state.listPage = 0;
-        clearTimeout(window._listSearchTimer);
-        window._listSearchTimer = setTimeout(()=>{
-          renderList(app).then(()=>{
-            const ni = document.getElementById('listSearchInput');
-            if(ni){ ni.focus(); const L=ni.value.length; ni.setSelectionRange(L,L); }
-          });
-        }, 350);
+        paintList();
       };
+      si.addEventListener('compositionstart', ()=>{ composing = true; });
+      si.addEventListener('compositionend', ()=>{ composing = false; apply(); });
+      si.addEventListener('input', ()=>{
+        if(composing) return;      // 한글 조합 중에는 건드리지 않음
+        apply();
+      });
     }
-    // 페이지 이동
-    const pp = document.getElementById('prevPageBtn');
-    if(pp) pp.onclick = ()=>{ if(state.listPage>0){ state.listPage--; renderList(app); window.scrollTo(0,0); } };
-    const np = document.getElementById('nextPageBtn');
-    if(np) np.onclick = ()=>{ state.listPage++; renderList(app); window.scrollTo(0,0); };
   } else {
     const cm = document.getElementById('coupleMakeBtn');
     if(cm) cm.onclick = ()=>{
